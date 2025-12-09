@@ -44,12 +44,52 @@ import {
 
 const BATO_DOMAIN = 'https://bato.to'
 
+// =========================
+// ✅ CDN ROTATION + RETRY
+// =========================
+
+function rotateBatoCDN(url: string): string {
+    try {
+        const u = new URL(url)
+        if (!u.hostname.includes('mbwww.org')) return url
+
+        const match = u.hostname.match(/^k(\d+)\.mbwww\.org$/)
+        if (!match) return url
+
+        let num = parseInt(match[1], 10)
+        num = num >= 20 ? 1 : num + 1
+
+        u.hostname = `k${num.toString().padStart(2, '0')}.mbwww.org`
+        return u.toString()
+    } catch {
+        return url
+    }
+}
+
+function sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+async function retryWithBackoff<T>(
+    fn: () => Promise<T>,
+    retries = 3,
+    delay = 500
+): Promise<T> {
+    try {
+        return await fn()
+    } catch (err) {
+        if (retries <= 0) throw err
+        await sleep(delay)
+        return retryWithBackoff(fn, retries - 1, delay * 2)
+    }
+}
+
 export const BatoToInfo: SourceInfo = {
-    version: '3.1.4',
+    version: '3.1.5',
     name: 'BatoTo',
     icon: 'icon.png',
-    author: 'niclimcy',
-    authorWebsite: 'https://github.com/niclimcy',
+    author: 'Drummerking523',
+    authorWebsite: 'https://github.com/drummerking523/BatoFix',
     description: 'Extension that pulls manga from bato.to',
     contentRating: ContentRating.MATURE,
     websiteBaseURL: BATO_DOMAIN,
@@ -71,20 +111,44 @@ export class BatoTo implements SearchResultsProviding, MangaProviding, ChapterPr
         requestTimeout: 15000,
         interceptor: {
             interceptRequest: async (request: Request): Promise<Request> => {
+
+                // ✅ Rotate CDN if image host
+                if (request.url.includes('mbwww.org')) {
+                    request.url = rotateBatoCDN(request.url)
+                }
+
                 request.headers = {
                     ...(request.headers ?? {}),
                     ...{
                         'referer': `${BATO_DOMAIN}/`,
-                        'user-agent': await this.requestManager.getDefaultUserAgent()
+                        'user-agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)'
                     }
                 }
+
                 if (request.url.includes('mangaId=')) {
                     const mangaId = request.url.replace('mangaId=', '')
                     if (mangaId) request.url = await this.getThumbnailUrl(mangaId)
                 }
+
                 return request
             },
+
             interceptResponse: async (response: Response): Promise<Response> => {
+
+                // ✅ Auto-retry for CDN 503 errors
+                if (response.status === 503 && response.request?.url?.includes('mbwww.org')) {
+                    const newUrl = rotateBatoCDN(response.request.url)
+
+                    return retryWithBackoff(async () => {
+                        const retryReq = App.createRequest({
+                            url: newUrl,
+                            method: response.request.method,
+                            headers: response.request.headers
+                        })
+                        return this.requestManager.schedule(retryReq, 1)
+                    })
+                }
+
                 return response
             }
         }
@@ -104,7 +168,9 @@ export class BatoTo implements SearchResultsProviding, MangaProviding, ChapterPr
         }))
     }
 
-    getMangaShareUrl(mangaId: string): string { return `${BATO_DOMAIN}/series/${mangaId}` }
+    getMangaShareUrl(mangaId: string): string {
+        return `${BATO_DOMAIN}/series/${mangaId}`
+    }
 
     async getMangaDetails(mangaId: string): Promise<SourceManga> {
         const request = App.createRequest({
@@ -127,7 +193,13 @@ export class BatoTo implements SearchResultsProviding, MangaProviding, ChapterPr
         const response = await this.requestManager.schedule(request, 1)
         this.CloudFlareError(response.status)
         const $ = this.cheerio.load(response.data as string)
-        return parseChapterList($, mangaId)
+
+        const chapters = parseChapterList($, mangaId)
+
+        // ✅ Soft-fail for zero chapters (no hard crash)
+        if (!chapters.length) return []
+
+        return chapters
     }
 
     async getChapterDetails(mangaId: string, chapterId: string): Promise<ChapterDetails> {
@@ -195,13 +267,11 @@ export class BatoTo implements SearchResultsProviding, MangaProviding, ChapterPr
         const page: number = metadata?.page ?? 1
         let request
 
-        // Regular search
         if (query.title) {
             request = App.createRequest({
                 url: `${BATO_DOMAIN}/search?word=${encodeURI(query.title ?? '')}&page=${page}`,
                 method: 'GET'
             })
-            // Tag Search
         } else {
             request = App.createRequest({
                 url: `${BATO_DOMAIN}/browse?genres=${query?.includedTags?.map((x: Tag) => x.id)[0]}&page=${page}`,
@@ -241,7 +311,9 @@ export class BatoTo implements SearchResultsProviding, MangaProviding, ChapterPr
 
     CloudFlareError(status: number): void {
         if (status == 503 || status == 403) {
-            throw new Error(`CLOUDFLARE BYPASS ERROR:\nPlease go to the homepage of <${BatoTo.name}> and press the cloud icon.`)
+            throw new Error(
+                `CLOUDFLARE BYPASS ERROR:\nPlease go to the homepage of <${BatoTo.name}> and press the cloud icon.`
+            )
         }
     }
 
