@@ -28,6 +28,7 @@ import {
     parseMangaDetails,
     parseSearch,
     parseTags,
+    parseThumbnailUrl,
     parseViewMore
 } from './BatoToParser'
 
@@ -36,26 +37,44 @@ import { languageSettings, resetSettings } from './BatoToSettings'
 
 const BATO_DOMAIN = 'https://bato.to'
 
-// =========================
-// ✅ FULL CDN HOST POOL
-// =========================
-const CDN_HOST_POOL = [
-    ...Array.from({ length: 10 }, (_, i) => `k${i.toString().padStart(2, '0')}`),  // k00–k09
-    ...Array.from({ length: 11 }, (_, i) => `n${i.toString().padStart(2, '0')}`)   // n00–n10
+/**
+ * Full K+N CDN host pool, e.g. k00–k09 and n00–n10.
+ * We only ever swap the **first** hostname label (kXX / nXX),
+ * leaving the rest of the domain intact (mbwww.org / mbimg.org / mbqgu.org, etc).
+ */
+const CDN_HOST_POOL: string[] = [
+    // k00–k09
+    ...Array.from({ length: 10 }, (_, i) => `k${i.toString().padStart(2, '0')}`),
+    // n00–n10
+    ...Array.from({ length: 11 }, (_, i) => `n${i.toString().padStart(2, '0')}`)
 ]
 
-// --- Helpers ---
 function sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+/**
+ * Given an image URL and an attempt index, return the same URL
+ * but with the CDN subdomain (kXX / nXX) rotated through CDN_HOST_POOL.
+ * If the URL does not look like a Bato image CDN, it is returned untouched.
+ */
 function getNextCDN(url: string, attempt: number): string {
     try {
         const u = new URL(url)
-        if (!u.hostname.includes('mbwww.org')) return url
 
-        const next = CDN_HOST_POOL[attempt % CDN_HOST_POOL.length]
-        u.hostname = `${next}.mbwww.org`
+        // Only touch hosts which look like "<letter><digits>.<rest-of-domain>"
+        // and which are Bato image CDNs (contain "mb" in the domain).
+        const hostParts = u.hostname.split('.')
+        if (hostParts.length < 2) return url
+
+        const [sub, ...rest] = hostParts
+
+        // Subdomain must look like k00 / n10 etc.
+        if (!/^[kn]\d{2}$/.test(sub)) return url
+        if (!u.hostname.includes('mb')) return url
+
+        const nextHost = CDN_HOST_POOL[attempt % CDN_HOST_POOL.length]
+        u.hostname = [nextHost, ...rest].join('.')
         return u.toString()
     } catch {
         return url
@@ -77,7 +96,7 @@ async function retryWithBackoff<T>(
 }
 
 // =========================
-// ✅ SOURCE INFO
+// SOURCE INFO
 // =========================
 export const BatoToInfo: SourceInfo = {
     version: '3.1.6',
@@ -89,10 +108,11 @@ export const BatoToInfo: SourceInfo = {
     contentRating: ContentRating.MATURE,
     websiteBaseURL: BATO_DOMAIN,
     sourceTags: [{ text: 'Multi Language', type: BadgeColor.BLUE }],
-    intents: SourceIntents.MANGA_CHAPTERS
-           | SourceIntents.HOMEPAGE_SECTIONS
-           | SourceIntents.SETTINGS_UI
-           | SourceIntents.CLOUDFLARE_BYPASS_REQUIRED
+    intents:
+        SourceIntents.MANGA_CHAPTERS |
+        SourceIntents.HOMEPAGE_SECTIONS |
+        SourceIntents.SETTINGS_UI |
+        SourceIntents.CLOUDFLARE_BYPASS_REQUIRED
 }
 
 export class BatoTo implements SearchResultsProviding, MangaProviding, ChapterProviding, HomePageSectionsProviding {
@@ -103,36 +123,53 @@ export class BatoTo implements SearchResultsProviding, MangaProviding, ChapterPr
         requestsPerSecond: 3,
         requestTimeout: 20000,
         interceptor: {
-
-            // ✅ Rewrite CDN host per attempt
+            // Rewrite CDN host per attempt for image requests
             interceptRequest: async (request: Request): Promise<Request> => {
-                const attempt = Number(request.headers?.['x-cdn-attempt'] ?? 0)
+                const attempt = Number((request.headers as any)?.['x-cdn-attempt'] ?? 0)
 
-                if (request.url.includes('mbwww.org')) {
+                // Only touch Bato image CDNs
+                if (request.url.includes('mb')) {
                     request.url = getNextCDN(request.url, attempt)
                 }
 
                 request.headers = {
                     ...(request.headers ?? {}),
                     'referer': `${BATO_DOMAIN}/`,
+                    // Mobile UA seems to behave better with Bato's anti-bot/CDN rules
                     'user-agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)',
                     'x-cdn-attempt': String(attempt)
+                }
+
+                // Legacy thumbnail indirection
+                if (request.url.includes('mangaId=')) {
+                    const mangaId = request.url.replace('mangaId=', '')
+                    if (mangaId) request.url = await this.getThumbnailUrl(mangaId)
                 }
 
                 return request
             },
 
-            // ✅ Retry on ANY failure type
+            // Retry CDN image failures by rotating through the host pool
             interceptResponse: async (response: Response): Promise<Response> => {
                 const status = response.status
                 const url = response.request?.url ?? ''
-                const attempt = Number(response.request?.headers?.['x-cdn-attempt'] ?? 0)
+                const attempt = Number((response.request?.headers as any)?.['x-cdn-attempt'] ?? 0)
 
-                const shouldRetry =
-                    url.includes('mbwww.org') &&
-                    (status === 503 || status === 403 || status === 0 || status === -1001 || status === -1003)
+                let isBatoImage = false
+                try {
+                    const hostname = new URL(url).hostname
+                    isBatoImage = url.includes('mb') && /^[kn]\d{2}\./.test(hostname)
+                } catch {
+                    isBatoImage = false
+                }
 
-                if (shouldRetry && attempt < CDN_HOST_POOL.length) {
+                const transientStatus =
+                    status === 503 || status === 403 || status === 0 ||
+                    status === -1001 || status === -1003
+
+                const shouldRetry = isBatoImage && transientStatus && attempt < CDN_HOST_POOL.length
+
+                if (shouldRetry) {
                     const nextUrl = getNextCDN(url, attempt + 1)
 
                     return retryWithBackoff(async () => {
@@ -140,7 +177,7 @@ export class BatoTo implements SearchResultsProviding, MangaProviding, ChapterPr
                             url: nextUrl,
                             method: response.request!.method,
                             headers: {
-                                ...response.request!.headers,
+                                ...(response.request!.headers ?? {}),
                                 'x-cdn-attempt': String(attempt + 1)
                             }
                         })
@@ -172,77 +209,117 @@ export class BatoTo implements SearchResultsProviding, MangaProviding, ChapterPr
     }
 
     async getMangaDetails(mangaId: string): Promise<SourceManga> {
-        const res = await this.requestManager.schedule(
-            App.createRequest({ url: `${BATO_DOMAIN}/series/${mangaId}`, method: 'GET' }), 1
-        )
-        this.CloudFlareError(res.status)
-        return parseMangaDetails(this.cheerio.load(res.data as string), mangaId)
+        const request = App.createRequest({
+            url: `${BATO_DOMAIN}/series/${mangaId}`,
+            method: 'GET'
+        })
+        const response = await this.requestManager.schedule(request, 1)
+        this.CloudFlareError(response.status)
+        const $ = this.cheerio.load(response.data as string)
+        return parseMangaDetails($, mangaId)
     }
 
     async getChapters(mangaId: string): Promise<Chapter[]> {
-        const res = await this.requestManager.schedule(
-            App.createRequest({ url: `${BATO_DOMAIN}/series/${mangaId}`, method: 'GET' }), 1
-        )
-        this.CloudFlareError(res.status)
-        const chapters = parseChapterList(this.cheerio.load(res.data as string), mangaId)
+        const request = App.createRequest({
+            url: `${BATO_DOMAIN}/series/${mangaId}`,
+            method: 'GET'
+        })
+        const response = await this.requestManager.schedule(request, 1)
+        this.CloudFlareError(response.status)
+        const $ = this.cheerio.load(response.data as string)
+        const chapters = parseChapterList($, mangaId)
 
-        // ✅ Soft-fail instead of crash
+        // Soft-fail instead of crashing if Bato returns an empty list
         if (!chapters.length) return []
-
         return chapters
     }
 
     async getChapterDetails(mangaId: string, chapterId: string): Promise<ChapterDetails> {
-        const res = await this.requestManager.schedule(
-            App.createRequest({ url: `${BATO_DOMAIN}/chapter/${chapterId}`, method: 'GET' }), 1
-        )
-        this.CloudFlareError(res.status)
-        return parseChapterDetails(this.cheerio.load(res.data as string), mangaId, chapterId)
+        const request = App.createRequest({
+            url: `${BATO_DOMAIN}/chapter/${chapterId}`,
+            method: 'GET'
+        })
+        const response = await this.requestManager.schedule(request, 1)
+        this.CloudFlareError(response.status)
+        const $ = this.cheerio.load(response.data as string)
+        return parseChapterDetails($, mangaId, chapterId)
     }
 
-    async getHomePageSections(cb: (section: HomeSection) => void): Promise<void> {
-        const res = await this.requestManager.schedule(
-            App.createRequest({ url: `${BATO_DOMAIN}`, method: 'GET' }), 1
-        )
-        this.CloudFlareError(res.status)
-        parseHomeSections(this.cheerio.load(res.data as string), cb)
+    async getHomePageSections(sectionCallback: (section: HomeSection) => void): Promise<void> {
+        const request = App.createRequest({
+            url: `${BATO_DOMAIN}`,
+            method: 'GET'
+        })
+        const response = await this.requestManager.schedule(request, 1)
+        this.CloudFlareError(response.status)
+        const $ = this.cheerio.load(response.data as string)
+        parseHomeSections($, sectionCallback)
     }
 
-    async getViewMoreItems(id: string, metadata: Metadata | undefined): Promise<PagedResults> {
-        const page = metadata?.page ?? 1
-        let param = id === 'popular_updates'
-            ? `?sort=views_d.za&page=${page}`
-            : `?sort=update.za&page=${page}`
+    async getViewMoreItems(homepageSectionId: string, metadata: Metadata | undefined): Promise<PagedResults> {
+        const page: number = metadata?.page ?? 1
+        let param = ''
 
-        const langHomeFilter = await this.stateManager.retrieve('language_home_filter') ?? false
-        const langs = await this.stateManager.retrieve('languages') ?? BTLanguages.getDefault()
+        switch (homepageSectionId) {
+            case 'popular_updates':
+                param = `?sort=views_d.za&page=${page}`
+                break
+            case 'latest_releases':
+                param = `?sort=update.za&page=${page}`
+                break
+            default:
+                throw new Error('Requested to getViewMoreItems for a section ID which doesn\'t exist')
+        }
+
+        const langHomeFilter: boolean = await this.stateManager.retrieve('language_home_filter') ?? false
+        const langs: string[] = await this.stateManager.retrieve('languages') ?? BTLanguages.getDefault()
         param += langHomeFilter ? `&langs=${langs.join(',')}` : ''
 
-        const res = await this.requestManager.schedule(
-            App.createRequest({ url: `${BATO_DOMAIN}/browse`, method: 'GET', param }), 1
-        )
+        const request = App.createRequest({
+            url: `${BATO_DOMAIN}/browse`,
+            method: 'GET',
+            param
+        })
+        const response = await this.requestManager.schedule(request, 1)
+        const $ = this.cheerio.load(response.data as string)
+        const manga = parseViewMore($)
 
-        const $ = this.cheerio.load(res.data as string)
         metadata = !isLastPage($) ? { page: page + 1 } : undefined
-
-        return App.createPagedResults({ results: parseViewMore($), metadata })
+        return App.createPagedResults({
+            results: manga,
+            metadata
+        })
     }
 
     async getSearchResults(query: SearchRequest, metadata: Metadata | undefined): Promise<PagedResults> {
-        const page = metadata?.page ?? 1
-        const req = query.title
-            ? App.createRequest({ url: `${BATO_DOMAIN}/search?word=${encodeURI(query.title)}&page=${page}`, method: 'GET' })
-            : App.createRequest({ url: `${BATO_DOMAIN}/browse?genres=${query?.includedTags?.[0]?.id}&page=${page}`, method: 'GET' })
+        const page: number = metadata?.page ?? 1
+        let request: Request
 
-        const langSearchFilter = await this.stateManager.retrieve('language_search_filter') ?? false
-        const langs = await this.stateManager.retrieve('languages') ?? BTLanguages.getDefault()
+        if (query.title) {
+            // Text search
+            request = App.createRequest({
+                url: `${BATO_DOMAIN}/search?word=${encodeURI(query.title ?? '')}&page=${page}`,
+                method: 'GET'
+            })
+        } else {
+            // Tag search – use first included tag
+            const tagId = query?.includedTags?.[0]?.id
+            request = App.createRequest({
+                url: `${BATO_DOMAIN}/browse?genres=${tagId ?? ''}&page=${page}`,
+                method: 'GET'
+            })
+        }
 
-        const res = await this.requestManager.schedule(req, 1)
-        const $ = this.cheerio.load(res.data as string)
+        const langSearchFilter: boolean = await this.stateManager.retrieve('language_search_filter') ?? false
+        const langs: string[] = await this.stateManager.retrieve('languages') ?? BTLanguages.getDefault()
+
+        const response = await this.requestManager.schedule(request, 1)
+        const $ = this.cheerio.load(response.data as string)
+        const manga = parseSearch($, langSearchFilter, langs)
+
         metadata = !isLastPage($) ? { page: page + 1 } : undefined
-
         return App.createPagedResults({
-            results: parseSearch($, langSearchFilter, langs),
+            results: manga,
             metadata
         })
     }
@@ -251,9 +328,22 @@ export class BatoTo implements SearchResultsProviding, MangaProviding, ChapterPr
         return parseTags()
     }
 
+    async getThumbnailUrl(mangaId: string): Promise<string> {
+        const request = App.createRequest({
+            url: `${BATO_DOMAIN}/series/${mangaId}`,
+            method: 'GET'
+        })
+        const response = await this.requestManager.schedule(request, 1)
+        this.CloudFlareError(response.status)
+        const $ = this.cheerio.load(response.data as string)
+        return parseThumbnailUrl($)
+    }
+
     CloudFlareError(status: number): void {
         if (status === 503 || status === 403) {
-            throw new Error(`CLOUDFLARE BYPASS ERROR:\nPlease go to the homepage of <${BatoTo.name}> and press the cloud icon.`)
+            throw new Error(
+                `CLOUDFLARE BYPASS ERROR:\nPlease go to the homepage of <${BatoTo.name}> and press the cloud icon.`
+            )
         }
     }
 
