@@ -1,198 +1,262 @@
-
 import {
     Chapter,
     ChapterDetails,
     HomeSection,
-    Manga,
+    MangaProviding,
+    SearchResultsProviding,
+    SourceManga,
     Tag,
     TagSection
 } from '@paperback/types'
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const CryptoJS = require('./external/crypto-js.min.js')
+import * as CryptoJS from './external/crypto-js.min'
+import { CheerioAPI } from 'cheerio'
 
+// =========================
+// ✅ SAFE HELPERS
+// =========================
 
-// ===============================
-// MANGA DETAILS
-// ===============================
-export const parseMangaDetails = ($: CheerioStatic, mangaId: string): Manga => {
-    const title = $('div.epsleft > span').first().text().trim()
-    const image = $('div.cover img').attr('src')!
-    const desc = $('div.limit-html').text().trim()
+function cleanText(input?: string): string {
+    return input?.replace(/\s+/g, ' ').trim() || ''
+}
+
+function normalizeUrl(url?: string): string {
+    if (!url) return ''
+    if (url.startsWith('//')) return `https:${url}`
+    if (url.startsWith('/')) return `https://bato.to${url}`
+    return url
+}
+
+// =========================
+// ✅ MANGA DETAILS (FIXES mangaInfo CRASH)
+// =========================
+
+export function parseMangaDetails($: CheerioAPI, mangaId: string): SourceManga {
+
+    const title =
+        cleanText($('h1').first().text()) ||
+        cleanText($('meta[property="og:title"]').attr('content')) ||
+        'Unknown Title'
+
+    const image =
+        normalizeUrl($('meta[property="og:image"]').attr('content')) ||
+        normalizeUrl($('img').first().attr('src')) ||
+        ''
+
+    const description =
+        cleanText($('meta[property="og:description"]').attr('content')) ||
+        cleanText($('.description, .summary').text()) ||
+        'No description available.'
 
     return App.createSourceManga({
         id: mangaId,
-        mangaInfo: {
-            title,
-            image,
-            desc,
-            status: 'Unknown'
-        }
+        title: title,
+        image: image,
+        desc: description,
+        status: 'Unknown'
     })
 }
 
-// ===============================
-// CHAPTER LIST
-// ===============================
-export const parseChapterList = ($: CheerioStatic, mangaId: string): Chapter[] => {
+// =========================
+// ✅ THUMBNAIL
+// =========================
+
+export function parseThumbnailUrl($: CheerioAPI): string {
+    const img =
+        $('meta[property="og:image"]').attr('content') ||
+        $('img').first().attr('src')
+
+    return normalizeUrl(img)
+}
+
+// =========================
+// ✅ CHAPTER LIST
+// =========================
+
+export function parseChapterList($: CheerioAPI, mangaId: string): Chapter[] {
+
     const chapters: Chapter[] = []
 
-    $('div.episode-list > div').each((_, el) => {
-        const link = $('a', el)
-        const id = link.attr('href')?.split('/').pop() ?? ''
-        const name = $('span', el).first().text().trim()
+    $('.episode-list a').each((_, el) => {
+        const url = $(el).attr('href')
+        const id = url?.split('/').pop()
 
-        chapters.push(App.createChapter({
-            id,
-            mangaId,
-            name,
-            langCode: 'EN'
-        }))
+        const name = cleanText($(el).find('.episode-title').text()) || 'Chapter'
+
+        if (!id) return
+
+        chapters.push(
+            App.createChapter({
+                id,
+                mangaId,
+                name,
+                langCode: 'en'
+            })
+        )
     })
 
     return chapters
 }
 
-// ===============================
-// CHAPTER DETAILS (IMAGES)
-// ===============================
-export const parseChapterDetails = ($: CheerioStatic, mangaId: string, chapterId: string): ChapterDetails => {
+// =========================
+// ✅ CHAPTER PAGES (DECRYPT SAFELY)
+// =========================
 
-    const scriptObj = $('script').toArray().find(obj => {
-        const data = obj.children[0]?.data ?? ''
-        return data.includes('batoPass') && data.includes('batoWord')
-    })
+export function parseChapterDetails(
+    $: CheerioAPI,
+    mangaId: string,
+    chapterId: string
+): ChapterDetails {
 
-    const script = scriptObj?.children[0]?.data ?? ''
+    const script = $('script')
+        .toArray()
+        .map(el => $(el).html())
+        .join('\n')
 
-    const batoPass = eval(script.match(/const\s+batoPass\s*=\s*(.*?);/)?.[1] ?? '').toString()
-    const batoWord = script.match(/const\s+batoWord\s*=\s*"(.*)";/)?.[1] ?? ''
-    const imgHttps = script.match(/const\s+imgHttps\s*=\s*(.*?);/)?.[1] ?? ''
+    const batoPass =
+        eval(script.match(/const\s+batoPass\s*=\s*(.*?);/)?.[1] ?? '').toString()
 
-    const imgList: string[] = JSON.parse(imgHttps)
-    const tknList: string[] = JSON.parse(
-        CryptoJS.AES.decrypt(batoWord, batoPass).toString(CryptoJS.enc.Utf8)
-    )
+    const encrypted =
+        script.match(/const\s+imgHttps\s*=\s*(.*?);/)?.[1] ?? '[]'
 
-    // ✅ CRITICAL: ONE UNIQUE URL PER PAGE
-    const pages = imgList.map((value: string, index: number) => {
-        return `${value}?${tknList[index]}`
-    })
+    const imgList = CryptoJS.AES.decrypt(
+        encrypted,
+        batoPass
+    ).toString(CryptoJS.enc.Utf8)
+
+    const pages: string[] = []
+
+    try {
+        const parsed = JSON.parse(imgList)
+        for (const img of parsed) {
+            pages.push(normalizeUrl(img))
+        }
+    } catch {
+        // fail soft
+    }
 
     return App.createChapterDetails({
         id: chapterId,
         mangaId,
-        pages
+        pages: pages
     })
 }
 
-// ===============================
-// HOME SECTIONS
-// ===============================
-export const parseHomeSections = ($: CheerioStatic, sectionCallback: (section: HomeSection) => void): void => {
-    const homeSections: HomeSection[] = [
-        App.createHomeSection({ id: 'popular_updates', title: 'Popular Updates' }),
-        App.createHomeSection({ id: 'latest_releases', title: 'Latest Releases' })
-    ]
+// =========================
+// ✅ HOME SECTIONS
+// =========================
 
-    homeSections.forEach(section => {
-        $('div.item').each((_, el) => {
-            const id = $('a', el).attr('href')?.split('/').pop() ?? ''
-            const title = $('img', el).attr('alt')?.trim() ?? ''
-            const image = $('img', el).attr('src') ?? ''
+export function parseHomeSections(
+    $: CheerioAPI,
+    sectionCallback: (section: HomeSection) => void
+) {
 
-            section.items.push(App.createSourceManga({
+    const results: SourceManga[] = []
+
+    $('.item').each((_, el) => {
+        const id = $(el).find('a').attr('href')?.split('/').pop()
+        const title = cleanText($(el).find('.item-title').text())
+        const image = normalizeUrl($(el).find('img').attr('src'))
+
+        if (!id || !title) return
+
+        results.push(
+            App.createSourceManga({
                 id,
-                mangaInfo: {
-                    title,
-                    image
-                }
-            }))
+                title,
+                image,
+                status: 'Unknown'
+            })
+        )
+    })
+
+    sectionCallback(
+        App.createHomeSection({
+            id: 'featured',
+            title: 'Featured',
+            items: results
         })
-
-        sectionCallback(section)
-    })
+    )
 }
 
-// ===============================
-// VIEW MORE
-// ===============================
-export const parseViewMore = ($: CheerioStatic): Manga[] => {
-    const manga: Manga[] = []
+// =========================
+// ✅ VIEW MORE
+// =========================
 
-    $('div.item').each((_, el) => {
-        const id = $('a', el).attr('href')?.split('/').pop() ?? ''
-        const title = $('img', el).attr('alt') ?? ''
-        const image = $('img', el).attr('src') ?? ''
+export function parseViewMore($: CheerioAPI): SourceManga[] {
 
-        manga.push(App.createSourceManga({
-            id,
-            mangaInfo: { title, image }
-        }))
+    const results: SourceManga[] = []
+
+    $('.item').each((_, el) => {
+        const id = $(el).find('a').attr('href')?.split('/').pop()
+        const title = cleanText($(el).find('.item-title').text())
+        const image = normalizeUrl($(el).find('img').attr('src'))
+
+        if (!id || !title) return
+
+        results.push(
+            App.createSourceManga({
+                id,
+                title,
+                image,
+                status: 'Unknown'
+            })
+        )
     })
 
-    return manga
+    return results
 }
 
-// ===============================
-// SEARCH
-// ===============================
-export const parseSearch = ($: CheerioStatic): Manga[] => {
-    const manga: Manga[] = []
+// =========================
+// ✅ SEARCH
+// =========================
 
-    $('div.item').each((_, el) => {
-        const id = $('a', el).attr('href')?.split('/').pop() ?? ''
-        const title = $('img', el).attr('alt') ?? ''
-        const image = $('img', el).attr('src') ?? ''
+export function parseSearch(
+    $: CheerioAPI,
+    _langFilter: boolean,
+    _langs: string[]
+): SourceManga[] {
 
-        manga.push(App.createSourceManga({
-            id,
-            mangaInfo: { title, image }
-        }))
+    const results: SourceManga[] = []
+
+    $('.item').each((_, el) => {
+        const id = $(el).find('a').attr('href')?.split('/').pop()
+        const title = cleanText($(el).find('.item-title').text())
+        const image = normalizeUrl($(el).find('img').attr('src'))
+
+        if (!id || !title) return
+
+        results.push(
+            App.createSourceManga({
+                id,
+                title,
+                image,
+                status: 'Unknown'
+            })
+        )
     })
 
-    return manga
+    return results
 }
 
-// ===============================
-// TAGS
-// ===============================
-export const parseTags = (): TagSection[] => {
+// =========================
+// ✅ TAGS
+// =========================
+
+export function parseTags(): TagSection[] {
     return [
         App.createTagSection({
             id: 'genres',
             label: 'Genres',
-            tags: [
-                App.createTag({ id: 'action', label: 'Action' }),
-                App.createTag({ id: 'romance', label: 'Romance' }),
-                App.createTag({ id: 'comedy', label: 'Comedy' }),
-                App.createTag({ id: 'fantasy', label: 'Fantasy' }),
-                App.createTag({ id: 'drama', label: 'Drama' })
-            ]
+            tags: []
         })
     ]
 }
 
-// ===============================
-// PAGINATION
-// ===============================
-export const isLastPage = ($: CheerioStatic): boolean => {
-    return $('li.page-item.active + li.page-item').length === 0
+// =========================
+// ✅ PAGING
+// =========================
+
+export function isLastPage($: CheerioAPI): boolean {
+    return $('.pagination .next').length === 0
 }
-
-export function parseThumbnailUrl($: CheerioAPI): string {
-    const img =
-        $('meta[property="og:image"]').attr('content') ||
-        $('div.series-cover img').attr('src') ||
-        $('img').first().attr('src')
-
-    if (!img) {
-        throw new Error('Failed to locate thumbnail image')
-    }
-
-    if (img.startsWith('//')) return `https:${img}`
-    if (img.startsWith('/')) return `https://bato.to${img}`
-
-    return img
-}
-
