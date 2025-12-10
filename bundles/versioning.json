@@ -1,1 +1,0 @@
-{"buildTime":"2025-12-10T00:40:12.272Z","sources":[{"id":"BatoTo","name":"BatoTo","author":"drummerking523","desc":"Stable BatoTo with automatic CDN failover","contentRating":"MATURE","version":"3.2.0","icon":"icon.png","tags":[{"text":"Multi Language","type":"default"}],"websiteBaseURL":"https://bato.to","intents":53}],"builtWith":{"toolchain":"0.8.7","types":"0.8.7"}}
