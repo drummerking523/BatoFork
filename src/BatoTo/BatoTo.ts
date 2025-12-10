@@ -28,7 +28,6 @@ import {
     parseMangaDetails,
     parseSearch,
     parseTags,
-    parseThumbnailUrl,
     parseViewMore
 } from './BatoToParser'
 
@@ -138,12 +137,6 @@ export class BatoTo implements SearchResultsProviding, MangaProviding, ChapterPr
                     // Mobile UA seems to behave better with Bato's anti-bot/CDN rules
                     'user-agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)',
                     'x-cdn-attempt': String(attempt)
-                }
-
-                // Legacy thumbnail indirection
-                if (request.url.includes('mangaId=')) {
-                    const mangaId = request.url.replace('mangaId=', '')
-                    if (mangaId) request.url = await this.getThumbnailUrl(mangaId)
                 }
 
                 return request
@@ -326,17 +319,6 @@ export class BatoTo implements SearchResultsProviding, MangaProviding, ChapterPr
 
     async getSearchTags(): Promise<TagSection[]> {
         return parseTags()
-    }
-
-    async getThumbnailUrl(mangaId: string): Promise<string> {
-        const request = App.createRequest({
-            url: `${BATO_DOMAIN}/series/${mangaId}`,
-            method: 'GET'
-        })
-        const response = await this.requestManager.schedule(request, 1)
-        this.CloudFlareError(response.status)
-        const $ = this.cheerio.load(response.data as string)
-        return parseThumbnailUrl($)
     }
 
     CloudFlareError(status: number): void {
