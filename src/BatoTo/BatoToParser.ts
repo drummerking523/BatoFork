@@ -1,3 +1,4 @@
+
 import {
     Chapter,
     ChapterDetails,
@@ -7,7 +8,9 @@ import {
     TagSection
 } from '@paperback/types'
 
-import * as CryptoJS from 'crypto-js'
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const CryptoJS = require('./external/crypto-js.min.js')
+
 
 // ===============================
 // MANGA DETAILS
