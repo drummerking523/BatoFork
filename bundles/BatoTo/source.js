@@ -2867,181 +2867,227 @@ var _Sources = (() => {
   // src/BatoTo/BatoToParser.ts
   var CryptoJS = __toESM(require_crypto_js_min());
   var entities = require_lib2();
-  function cleanText(input) {
-    return input?.replace(/\s+/g, " ").trim() || "";
-  }
-  function normalizeUrl(url) {
-    if (!url) return "";
-    if (url.startsWith("//")) return `https:${url}`;
-    if (url.startsWith("/")) return `https://bato.to${url}`;
-    return url;
-  }
-  function parseMangaDetails($2, mangaId2) {
-    const title = cleanText($2("h1").first().text()) || cleanText($2('meta[property="og:title"]').attr("content")) || "Unknown Title";
-    const image = normalizeUrl($2('meta[property="og:image"]').attr("content")) || normalizeUrl($2("img").first().attr("src")) || "";
-    const description = cleanText($2('meta[property="og:description"]').attr("content")) || cleanText($2(".description, .summary").text()) || "No description available.";
+  var parseMangaDetails = ($2, mangaId2) => {
+    const titles = [];
+    titles.push(decodeHTMLEntity($2("a", $2(".item-title")).text().trim() ?? ""));
+    const altTitles = $2(".alias-set").text().trim().split("/");
+    for (const title of altTitles) {
+      titles.push(decodeHTMLEntity(title));
+    }
+    const description = decodeHTMLEntity($2(".limit-html").text().trim() ?? "");
+    const authorElement = $2('div.attr-item b:contains("Authors")').next("span");
+    const author = authorElement.length ? authorElement.children().map((_, e) => {
+      return $2(e).text().trim();
+    }).toArray().join(", ") : "";
+    const artistElement = $2('div.attr-item b:contains("Artists")').next("span");
+    const artist = artistElement.length ? artistElement.children().map((_, e) => {
+      return $2(e).text().trim();
+    }).toArray().join(", ") : "";
+    const arrayTags = [];
+    for (const tag of $2('div.attr-item b:contains("Genres")').next("span").children().toArray()) {
+      const label = $2(tag).text().trim();
+      const id = encodeURI(BTGenres.getParam(label) ?? label);
+      if (!id || !label) continue;
+      arrayTags.push({ id, label });
+    }
+    const tagSections = [App.createTagSection({ id: "0", label: "genres", tags: arrayTags.map((x) => App.createTag(x)) })];
+    const rawStatus = $2('div.attr-item b:contains("Upload status")').next("span").text().trim();
+    let status = "ONGOING";
+    switch (rawStatus.toUpperCase()) {
+      case "ONGOING":
+        status = "Ongoing";
+        break;
+      case "COMPLETED":
+        status = "Completed";
+        break;
+      case "HIATUS":
+        status = "Hiatus";
+        break;
+      default:
+        status = "Ongoing";
+        break;
+    }
     return App.createSourceManga({
       id: mangaId2,
-      title,
-      image,
-      desc: description,
-      status: "Unknown"
+      mangaInfo: App.createMangaInfo({
+        titles,
+        image: `mangaId=${mangaId2}`,
+        status,
+        author,
+        artist,
+        tags: tagSections,
+        desc: description
+      })
     });
-  }
-  function parseThumbnailUrl($2) {
-    const img = $2('meta[property="og:image"]').attr("content") || $2("img").first().attr("src");
-    return normalizeUrl(img);
-  }
-  function parseChapterList($2, mangaId2) {
+  };
+  var parseChapterList = ($2, mangaId2) => {
     const chapters = [];
-    $2(".episode-list a").each((_, el) => {
-      const url = $2(el).attr("href");
-      const id = url?.split("/").pop();
-      const name = cleanText($2(el).find(".episode-title").text()) || "Chapter";
-      if (!id) return;
-      chapters.push(
-        App.createChapter({
-          id,
-          mangaId: mangaId2,
-          name,
-          langCode: "en"
-        })
-      );
-    });
-    return chapters;
-  }
-  function parseChapterDetails($, mangaId, chapterId) {
-    const script = $("script").toArray().map((el) => $(el).html()).join("\n");
-    const batoPass = eval(script.match(/const\s+batoPass\s*=\s*(.*?);/)?.[1] ?? "").toString();
-    const encrypted = script.match(/const\s+imgHttps\s*=\s*(.*?);/)?.[1] ?? "[]";
-    const imgList = CryptoJS.AES.decrypt(
-      encrypted,
-      batoPass
-    ).toString(CryptoJS.enc.Utf8);
-    const pages = [];
-    try {
-      const parsed = JSON.parse(imgList);
-      for (const img of parsed) {
-        pages.push(normalizeUrl(img));
-      }
-    } catch {
+    let sortingIndex = 0;
+    for (const chapter of $2("div.episode-list div.main .item").toArray()) {
+      const title = $2("b", chapter).text().trim();
+      const chapterId2 = $2("a", chapter).attr("href")?.replace(/\/$/, "")?.split("/").pop() ?? "";
+      const group = $2("a.ps-3 > span", chapter).text().trim();
+      if (!chapterId2) continue;
+      let language = BTLanguages.getLangCode($2("em").attr("data-lang") ?? "");
+      if (language === "Unknown") language = "\u{1F1EC}\u{1F1E7}";
+      const timeAgo = $2("i.ps-3", chapter).text().trim().split(" ");
+      const chapNumRegex = title.match(/(\d+)(?:[-.]\d+)?/);
+      let date = new Date(Date.now());
+      if (timeAgo[1] == "secs") date = new Date(Date.now() - 1e3 * Number(timeAgo[0]));
+      if (timeAgo[1] == "mins") date = new Date(Date.now() - 1e3 * 60 * Number(timeAgo[0]));
+      if (timeAgo[1] == "hours") date = new Date(Date.now() - 1e3 * 3600 * Number(timeAgo[0]));
+      if (timeAgo[1] == "days") date = new Date(Date.now() - 1e3 * 3600 * 24 * Number(timeAgo[0]));
+      let chapNum = chapNumRegex && chapNumRegex[1] ? Number(chapNumRegex[1].replace("-", ".")) : 0;
+      if (isNaN(chapNum)) chapNum = 0;
+      chapters.push({
+        id: chapterId2,
+        name: title,
+        langCode: language,
+        chapNum,
+        time: date,
+        sortingIndex,
+        volume: 0,
+        group
+      });
+      sortingIndex--;
     }
-    return App.createChapterDetails({
+    if (chapters.length == 0) {
+      throw new Error(`Couldn't find any chapters for mangaId: ${mangaId2}!`);
+    }
+    return chapters.map((chapter) => {
+      chapter.sortingIndex += chapters.length;
+      return App.createChapter(chapter);
+    });
+  };
+  var parseChapterDetails = ($, mangaId, chapterId) => {
+    const scriptObj = $("script").toArray().find((obj) => {
+      const data = obj.children[0]?.data ?? "";
+      return data.includes("batoPass") && data.includes("batoWord");
+    });
+    const script = scriptObj?.children[0]?.data ?? "";
+    const batoPass = eval(script.match(/const\s+batoPass\s*=\s*(.*?);/)?.[1] ?? "").toString();
+    const batoWord = script.match(/const\s+batoWord\s*=\s*"(.*)";/)?.[1] ?? "";
+    const imgHttps = script.match(/const\s+imgHttps\s*=\s*(.*?);/)?.[1] ?? "";
+    const imgList = JSON.parse(imgHttps);
+    const tknList = JSON.parse(CryptoJS.AES.decrypt(batoWord, batoPass).toString(CryptoJS.enc.Utf8));
+    const pages = imgList.map((value, index) => `${value}?${tknList[index]}`);
+    const chapterDetails = App.createChapterDetails({
       id: chapterId,
       mangaId,
       pages
     });
-  }
+    return chapterDetails;
+  };
   var parseHomeSections = ($2, sectionCallback) => {
-    const createTileManga = (elem) => {
-      const mangaId2 = $2("a", elem).attr("href")?.split("/series/")[1]?.split(/[/?#]/)[0];
-      if (!mangaId2) return null;
-      const title = $2(".item-title", elem).text().trim() || $2("img", elem).attr("alt")?.trim() || "Unknown Title";
-      const image = `mangaId=${mangaId2}`;
-      return App.createSourceManga({
-        id: mangaId2,
-        mangaInfo: App.createMangaInfo({
-          titles: [title],
-          image,
-          status: "Ongoing",
-          // we don’t know actual status from the tile
-          author: "",
-          artist: "",
-          tags: [],
-          desc: ""
-        })
-      });
-    };
     const popularSection = App.createHomeSection({
       id: "popular_updates",
       title: "Popular Updates",
-      type: import_types.HomeSectionType.singleRowLarge,
-      containsMoreItems: true
+      containsMoreItems: true,
+      type: import_types.HomeSectionType.singleRowLarge
     });
     const latestSection = App.createHomeSection({
       id: "latest_releases",
       title: "Latest Releases",
-      type: import_types.HomeSectionType.singleRowNormal,
-      containsMoreItems: true
+      containsMoreItems: true,
+      type: import_types.HomeSectionType.singleRowNormal
     });
-    const popularItems = [];
-    const latestItems = [];
-    $2(".hot-updates .col.item, .highlight-updates .col.item").each((_, elem) => {
-      const manga = createTileManga($2(elem));
-      if (manga) popularItems.push(manga);
-    });
-    $2(".latest-updates .col.item, .latest-updates .item").each((_, elem) => {
-      const manga = createTileManga($2(elem));
-      if (manga) latestItems.push(manga);
-    });
-    popularSection.items = popularItems;
-    latestSection.items = latestItems;
+    const popularSection_Array = [];
+    for (const manga of $2(".home-popular .col.item").toArray()) {
+      const image = $2("img", manga).first().attr("src") ?? "";
+      const title = $2(".item-title", manga).text().trim() ?? "";
+      const id = $2("a", manga).attr("href")?.replace("/series/", "")?.trim().split("/")[0] ?? "";
+      const btcode = $2("em", manga).attr("data-lang");
+      const lang = btcode ? BTLanguages.getLangCode(btcode) : "\u{1F1EC}\u{1F1E7}";
+      const subtitle = lang + " " + $2(".item-volch", manga).text().trim();
+      if (!id || !title) continue;
+      popularSection_Array.push(App.createPartialSourceManga({
+        image,
+        title: decodeHTMLEntity(title),
+        mangaId: id,
+        subtitle: decodeHTMLEntity(subtitle)
+      }));
+    }
+    popularSection.items = popularSection_Array;
     sectionCallback(popularSection);
+    const latestSection_Array = [];
+    for (const manga of $2(".series-list .col.item").toArray()) {
+      const image = $2("img", manga).attr("src") ?? "";
+      const title = $2(".item-title", manga).text().trim() ?? "";
+      const id = $2("a", manga).attr("href")?.replace("/series/", "")?.trim().split("/")[0] ?? "";
+      const btcode = $2("em", manga).attr("data-lang");
+      const lang = btcode ? BTLanguages.getLangCode(btcode) : "\u{1F1EC}\u{1F1E7}";
+      const subtitle = lang + " " + $2(".item-volch a", manga).text().trim();
+      if (!id || !title) continue;
+      latestSection_Array.push(App.createPartialSourceManga({
+        image,
+        title: decodeHTMLEntity(title),
+        mangaId: id,
+        subtitle: decodeHTMLEntity(subtitle)
+      }));
+    }
+    latestSection.items = latestSection_Array;
     sectionCallback(latestSection);
   };
   var parseViewMore = ($2) => {
+    const manga = [];
+    const collectedIds = [];
+    for (const obj of $2(".item", "#series-list").toArray()) {
+      const id = $2("a", obj).attr("href")?.replace("/series/", "").trim().split("/")[0] ?? "";
+      const title = $2(".item-title", obj).text();
+      const btcode = $2("em", obj).attr("data-lang");
+      const lang = btcode ? BTLanguages.getLangCode(btcode) : "\u{1F1EC}\u{1F1E7}";
+      const subtitle = lang + " " + $2(".visited", obj).text().trim();
+      const image = $2("img", obj).attr("src") ?? "";
+      if (!id || !title || collectedIds.includes(id)) continue;
+      manga.push(App.createPartialSourceManga({
+        image,
+        title: decodeHTMLEntity(title),
+        mangaId: id,
+        subtitle: decodeHTMLEntity(subtitle)
+      }));
+      collectedIds.push(id);
+    }
+    return manga;
+  };
+  var parseTags = () => {
+    const arrayTags = [];
+    for (const label of BTGenres.getGenresList()) {
+      const id = encodeURI(BTGenres.getParam(label) ?? label);
+      if (!id || !label) continue;
+      arrayTags.push({ id, label });
+    }
+    const tagSections = [App.createTagSection({ id: "0", label: "genres", tags: arrayTags.map((x) => App.createTag(x)) })];
+    return tagSections;
+  };
+  var parseSearch = ($2, langFilter, langs) => {
     const mangas = [];
-    $2(".series-list .col.item, .series-list .item").each((_, manga) => {
-      const id = $2("a", manga).attr("href")?.split("/series/")[1]?.split(/[/?#]/)[0];
-      if (!id) return;
-      const title = $2(".item-title", manga).text().trim() || $2("img", manga).attr("alt")?.trim() || "Unknown Title";
-      const image = `mangaId=${id}`;
-      mangas.push(
-        App.createSourceManga({
-          id,
-          mangaInfo: App.createMangaInfo({
-            titles: [title],
-            image,
-            status: "Ongoing",
-            author: "",
-            artist: "",
-            tags: [],
-            desc: ""
-          })
-        })
-      );
-    });
+    for (const obj of $2(".item", "#series-list").toArray()) {
+      const id = $2(".item-cover", obj).attr("href")?.replace("/series/", "")?.trim().split("/")[0] ?? "";
+      const title = $2(".item-title", obj).text() ?? "";
+      const btcode = $2("em", obj).attr("data-lang") ?? "en,en_us";
+      const lang = btcode ? BTLanguages.getLangCode(btcode) : "\u{1F1EC}\u{1F1E7}";
+      const subtitle = lang + " " + $2(".visited", obj).text().trim();
+      const image = $2("img", obj).attr("src") ?? "";
+      if (!id || !title) continue;
+      if (langFilter && !langs.includes(btcode)) continue;
+      mangas.push(App.createPartialSourceManga({
+        image,
+        title: decodeHTMLEntity(title),
+        mangaId: id,
+        subtitle
+      }));
+    }
     return mangas;
   };
-  var parseSearch = ($2, langSearchFilter, langs) => {
-    const results = [];
-    $2(".series-list .col.item, .series-list .item").each((_, manga) => {
-      const id = $2("a", manga).attr("href")?.split("/series/")[1]?.split(/[/?#]/)[0];
-      if (!id) return;
-      let lang = BTLanguages.getLangCode($2(".item-lang", manga).text().trim() || "");
-      if (lang === "Unknown") lang = "\u{1F1EC}\u{1F1E7}";
-      if (langSearchFilter && !langs.includes(lang)) return;
-      const title = $2(".item-title", manga).text().trim() || $2("img", manga).attr("alt")?.trim() || "Unknown Title";
-      const image = `mangaId=${id}`;
-      results.push(
-        App.createSourceManga({
-          id,
-          mangaInfo: App.createMangaInfo({
-            titles: [title],
-            image,
-            status: "Ongoing",
-            author: "",
-            artist: "",
-            tags: [],
-            desc: ""
-          })
-        })
-      );
-    });
-    return results;
+  var parseThumbnailUrl = ($2) => {
+    return $2("div.attr-cover img").attr("src") ?? "";
   };
-  function parseTags() {
-    return [
-      App.createTagSection({
-        id: "genres",
-        label: "Genres",
-        tags: []
-      })
-    ];
-  }
-  function isLastPage($2) {
-    return $2(".pagination .next").length === 0;
-  }
+  var isLastPage = ($2) => {
+    return $2(".page-item").last().hasClass("disabled");
+  };
+  var decodeHTMLEntity = (str) => {
+    return entities.decodeHTML(str);
+  };
 
   // src/BatoTo/BatoToSettings.ts
   var getLanguages = async (stateManager) => {
