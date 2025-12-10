@@ -179,3 +179,20 @@ export const parseTags = (): TagSection[] => {
 export const isLastPage = ($: CheerioStatic): boolean => {
     return $('li.page-item.active + li.page-item').length === 0
 }
+
+export function parseThumbnailUrl($: CheerioAPI): string {
+    const img =
+        $('meta[property="og:image"]').attr('content') ||
+        $('div.series-cover img').attr('src') ||
+        $('img').first().attr('src')
+
+    if (!img) {
+        throw new Error('Failed to locate thumbnail image')
+    }
+
+    if (img.startsWith('//')) return `https:${img}`
+    if (img.startsWith('/')) return `https://bato.to${img}`
+
+    return img
+}
+
