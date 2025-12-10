@@ -149,10 +149,9 @@ export const parseChapterDetails = ($: CheerioStatic, mangaId: string, chapterId
         CryptoJS.AES.decrypt(batoWord, batoPass).toString(CryptoJS.enc.Utf8)
     )
 
-    // ✅ THIS IS THE CRITICAL FIX:
-    const pages = imgList.flatMap((value: string, index: number) => {
-        const full = `${value}?${tknList[index]}`
-        return buildCdnFallbacks(full)
+    // ✅ CORRECT: One URL per page, not flattened
+    const pages = imgList.map((value: string, index: number) => {
+        return `${value}?${tknList[index]}`
     })
 
     return App.createChapterDetails({
@@ -161,6 +160,7 @@ export const parseChapterDetails = ($: CheerioStatic, mangaId: string, chapterId
         pages
     })
 }
+
 
 // =========================
 // ✅ HOMEPAGE

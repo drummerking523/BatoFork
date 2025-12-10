@@ -2976,9 +2976,8 @@ var _Sources = (() => {
     const tknList = JSON.parse(
       CryptoJS.AES.decrypt(batoWord, batoPass).toString(CryptoJS.enc.Utf8)
     );
-    const pages = imgList.flatMap((value, index) => {
-      const full = `${value}?${tknList[index]}`;
-      return buildCdnFallbacks(full);
+    const pages = imgList.map((value, index) => {
+      return `${value}?${tknList[index]}`;
     });
     return App.createChapterDetails({
       id: chapterId,
