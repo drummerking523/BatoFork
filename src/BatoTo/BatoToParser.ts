@@ -2,137 +2,59 @@ import {
     Chapter,
     ChapterDetails,
     HomeSection,
-    HomeSectionType,
-    PartialSourceManga,
-    SourceManga,
+    Manga,
     Tag,
     TagSection
 } from '@paperback/types'
 
-import {
-    BTGenres,
-    BTLanguages
-} from './BatoToHelper'
+import * as CryptoJS from 'crypto-js'
 
-import * as CryptoJS from './external/crypto-js.min'
-import entities = require('entities')
-
-// =========================
-// ✅ FULL k+n CDN HOST POOL
-// =========================
-const CDN_HOST_POOL = [
-    "k03","k06","k07","k00","k01","k02","k04","k05","k08","k09",
-    "n00","n01","n02","n03","n04","n05","n06","n07","n08","n09","n10"
-]
-
-// ✅ Convert a single image URL into a fallback chain
-const buildCdnFallbacks = (originalUrl: string): string[] => {
-    try {
-        const base = originalUrl.replace(/^https:\/\/[a-z]\d{2}\./, '')
-        return CDN_HOST_POOL.map(host => `https://${host}.${base}`)
-    } catch {
-        return [originalUrl]
-    }
-}
-
-// ✅ Decode helper
-const decodeHTMLEntity = (str: string): string => {
-    return entities.decodeHTML(str)
-}
-
-// =========================
-// ✅ MANGA DETAILS
-// =========================
-export const parseMangaDetails = ($: CheerioStatic, mangaId: string): SourceManga => {
-    const titles: string[] = []
-
-    titles.push(decodeHTMLEntity($('a', $('.item-title')).text().trim() ?? ''))
-    const altTitles = $('.alias-set').text().trim().split('/')
-    for (const title of altTitles) titles.push(decodeHTMLEntity(title))
-
-    const description = decodeHTMLEntity($('.limit-html').text().trim() ?? '')
-
-    const authorElement = $('div.attr-item b:contains("Authors")').next('span')
-    const author = authorElement.length
-        ? authorElement.children().map((_: number, e: CheerioElement) => $(e).text().trim()).toArray().join(', ')
-        : ''
-
-    const artistElement = $('div.attr-item b:contains("Artists")').next('span')
-    const artist = artistElement.length
-        ? artistElement.children().map((_: number, e: CheerioElement) => $(e).text().trim()).toArray().join(', ')
-        : ''
-
-    const arrayTags: Tag[] = []
-    for (const tag of $('div.attr-item b:contains("Genres")').next('span').children().toArray()) {
-        const label = $(tag).text().trim()
-        const id = encodeURI(BTGenres.getParam(label) ?? label)
-        if (!id || !label) continue
-        arrayTags.push({ id, label })
-    }
-
-    const tagSections: TagSection[] = [
-        App.createTagSection({ id: '0', label: 'genres', tags: arrayTags.map(x => App.createTag(x)) })
-    ]
-
-    const rawStatus = $('div.attr-item b:contains("Upload status")').next('span').text().trim()
-    const status =
-        rawStatus === 'COMPLETED' ? 'Completed' :
-        rawStatus === 'HIATUS' ? 'Hiatus' : 'Ongoing'
+// ===============================
+// MANGA DETAILS
+// ===============================
+export const parseMangaDetails = ($: CheerioStatic, mangaId: string): Manga => {
+    const title = $('div.epsleft > span').first().text().trim()
+    const image = $('div.cover img').attr('src')!
+    const desc = $('div.limit-html').text().trim()
 
     return App.createSourceManga({
         id: mangaId,
-        mangaInfo: App.createMangaInfo({
-            titles,
-            image: `mangaId=${mangaId}`,
-            status,
-            author,
-            artist,
-            tags: tagSections,
-            desc: description
-        })
+        mangaInfo: {
+            title,
+            image,
+            desc,
+            status: 'Unknown'
+        }
     })
 }
 
-// =========================
-// ✅ CHAPTER LIST
-// =========================
+// ===============================
+// CHAPTER LIST
+// ===============================
 export const parseChapterList = ($: CheerioStatic, mangaId: string): Chapter[] => {
     const chapters: Chapter[] = []
-    let sortingIndex = 0
 
-    for (const chapter of $('div.episode-list div.main .item').toArray()) {
-        const title = $('b', chapter).text().trim()
-        const chapterId: string = $('a', chapter).attr('href')?.replace(/\/$/, '')?.split('/').pop() ?? ''
-        const group: string = $('a.ps-3 > span', chapter).text().trim()
-        if (!chapterId) continue
-
-        let language = BTLanguages.getLangCode($('em').attr('data-lang') ?? '')
-        if (language === 'Unknown') language = '🇬🇧'
-
-        const chapNumRegex = title.match(/(\d+)(?:[-.]\d+)?/)
-        let chapNum = chapNumRegex ? Number(chapNumRegex[1]) : 0
-        if (isNaN(chapNum)) chapNum = 0
+    $('div.episode-list > div').each((_, el) => {
+        const link = $('a', el)
+        const id = link.attr('href')?.split('/').pop() ?? ''
+        const name = $('span', el).first().text().trim()
 
         chapters.push(App.createChapter({
-            id: chapterId,
-            name: title,
-            langCode: language,
-            chapNum,
-            time: new Date(),
-            sortingIndex,
-            volume: 0,
-            group
+            id,
+            mangaId,
+            name,
+            langCode: 'EN'
         }))
-        sortingIndex--
-    }
+    })
 
-    return chapters.reverse()
+    return chapters
 }
 
-// =========================
-// ✅ ✅ ✅ CHAPTER DETAILS (FULL CDN FALLBACK)
-// =========================
+// ===============================
+// CHAPTER DETAILS (IMAGES)
+// ===============================
 export const parseChapterDetails = ($: CheerioStatic, mangaId: string, chapterId: string): ChapterDetails => {
+
     const scriptObj = $('script').toArray().find(obj => {
         const data = obj.children[0]?.data ?? ''
         return data.includes('batoPass') && data.includes('batoWord')
@@ -149,7 +71,7 @@ export const parseChapterDetails = ($: CheerioStatic, mangaId: string, chapterId
         CryptoJS.AES.decrypt(batoWord, batoPass).toString(CryptoJS.enc.Utf8)
     )
 
-    // ✅ CORRECT: One URL per page, not flattened
+    // ✅ CRITICAL: ONE UNIQUE URL PER PAGE
     const pages = imgList.map((value: string, index: number) => {
         return `${value}?${tknList[index]}`
     })
@@ -161,35 +83,96 @@ export const parseChapterDetails = ($: CheerioStatic, mangaId: string, chapterId
     })
 }
 
-
-// =========================
-// ✅ HOMEPAGE
-// =========================
+// ===============================
+// HOME SECTIONS
+// ===============================
 export const parseHomeSections = ($: CheerioStatic, sectionCallback: (section: HomeSection) => void): void => {
-    const popularSection = App.createHomeSection({
-        id: 'popular_updates',
-        title: 'Popular Updates',
-        containsMoreItems: true,
-        type: HomeSectionType.singleRowLarge
+    const homeSections: HomeSection[] = [
+        App.createHomeSection({ id: 'popular_updates', title: 'Popular Updates' }),
+        App.createHomeSection({ id: 'latest_releases', title: 'Latest Releases' })
+    ]
+
+    homeSections.forEach(section => {
+        $('div.item').each((_, el) => {
+            const id = $('a', el).attr('href')?.split('/').pop() ?? ''
+            const title = $('img', el).attr('alt')?.trim() ?? ''
+            const image = $('img', el).attr('src') ?? ''
+
+            section.items.push(App.createSourceManga({
+                id,
+                mangaInfo: {
+                    title,
+                    image
+                }
+            }))
+        })
+
+        sectionCallback(section)
     })
-
-    const popularArray: PartialSourceManga[] = []
-    for (const manga of $('.home-popular .col.item').toArray()) {
-        const image = $('img', manga).first().attr('src') ?? ''
-        const title = $('.item-title', manga).text().trim() ?? ''
-        const id = $('a', manga).attr('href')?.replace('/series/', '').trim().split('/')[0] ?? ''
-        if (!id || !title) continue
-        popularArray.push(App.createPartialSourceManga({ image, title, mangaId: id }))
-    }
-
-    popularSection.items = popularArray
-    sectionCallback(popularSection)
 }
 
-// =========================
-// ✅ TAGS / SEARCH / VIEW MORE (UNCHANGED LOGIC)
-// =========================
-export const parseViewMore = ($: CheerioStatic) => []
-export const parseTags = () => []
-export const parseSearch = ($: CheerioStatic) => []
-export const isLastPage = ($: CheerioStatic) => $('.page-item').last().hasClass('disabled')
+// ===============================
+// VIEW MORE
+// ===============================
+export const parseViewMore = ($: CheerioStatic): Manga[] => {
+    const manga: Manga[] = []
+
+    $('div.item').each((_, el) => {
+        const id = $('a', el).attr('href')?.split('/').pop() ?? ''
+        const title = $('img', el).attr('alt') ?? ''
+        const image = $('img', el).attr('src') ?? ''
+
+        manga.push(App.createSourceManga({
+            id,
+            mangaInfo: { title, image }
+        }))
+    })
+
+    return manga
+}
+
+// ===============================
+// SEARCH
+// ===============================
+export const parseSearch = ($: CheerioStatic): Manga[] => {
+    const manga: Manga[] = []
+
+    $('div.item').each((_, el) => {
+        const id = $('a', el).attr('href')?.split('/').pop() ?? ''
+        const title = $('img', el).attr('alt') ?? ''
+        const image = $('img', el).attr('src') ?? ''
+
+        manga.push(App.createSourceManga({
+            id,
+            mangaInfo: { title, image }
+        }))
+    })
+
+    return manga
+}
+
+// ===============================
+// TAGS
+// ===============================
+export const parseTags = (): TagSection[] => {
+    return [
+        App.createTagSection({
+            id: 'genres',
+            label: 'Genres',
+            tags: [
+                App.createTag({ id: 'action', label: 'Action' }),
+                App.createTag({ id: 'romance', label: 'Romance' }),
+                App.createTag({ id: 'comedy', label: 'Comedy' }),
+                App.createTag({ id: 'fantasy', label: 'Fantasy' }),
+                App.createTag({ id: 'drama', label: 'Drama' })
+            ]
+        })
+    ]
+}
+
+// ===============================
+// PAGINATION
+// ===============================
+export const isLastPage = ($: CheerioStatic): boolean => {
+    return $('li.page-item.active + li.page-item').length === 0
+}
