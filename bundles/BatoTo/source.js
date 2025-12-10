@@ -2417,6 +2417,7 @@ var _Sources = (() => {
     }
   }
   var BatoToInfo = {
+    id: "BatoTo",
     version: "3.1.6",
     name: "BatoTo",
     icon: "icon.png",
@@ -2425,12 +2426,7 @@ var _Sources = (() => {
     description: "Extension that pulls manga from bato.to",
     contentRating: import_types2.ContentRating.MATURE,
     websiteBaseURL: BATO_DOMAIN,
-    sourceTags: [
-      {
-        text: "Multi Language",
-        type: import_types2.BadgeColor.BLUE
-      }
-    ],
+    sourceTags: [{ text: "Multi Language", type: import_types2.BadgeColor.BLUE }],
     intents: import_types2.SourceIntents.MANGA_CHAPTERS | import_types2.SourceIntents.HOMEPAGE_SECTIONS | import_types2.SourceIntents.SETTINGS_UI | import_types2.SourceIntents.CLOUDFLARE_BYPASS_REQUIRED
   };
   var BatoTo = class _BatoTo {

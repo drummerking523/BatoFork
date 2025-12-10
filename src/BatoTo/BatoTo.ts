@@ -95,6 +95,7 @@ async function retryWithBackoff<T>(
 // ✅ Source info
 // =========================
 export const BatoToInfo: SourceInfo = {
+    id: 'BatoTo',
     version: '3.1.6',
     name: 'BatoTo',
     icon: 'icon.png',
@@ -103,18 +104,14 @@ export const BatoToInfo: SourceInfo = {
     description: 'Extension that pulls manga from bato.to',
     contentRating: ContentRating.MATURE,
     websiteBaseURL: BATO_DOMAIN,
-    sourceTags: [
-        {
-            text: 'Multi Language',
-            type: BadgeColor.BLUE
-        }
-    ],
+    sourceTags: [{ text: 'Multi Language', type: BadgeColor.BLUE }],
     intents:
         SourceIntents.MANGA_CHAPTERS |
         SourceIntents.HOMEPAGE_SECTIONS |
         SourceIntents.SETTINGS_UI |
         SourceIntents.CLOUDFLARE_BYPASS_REQUIRED
 }
+
 
 export class BatoTo implements SearchResultsProviding, MangaProviding, ChapterProviding, HomePageSectionsProviding {
 
