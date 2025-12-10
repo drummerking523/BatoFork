@@ -10,8 +10,14 @@ import {
     TagSection
 } from '@paperback/types'
 
+import {
+    BTGenres,
+    BTLanguages
+} from './BatoToHelper'
+
 import * as CryptoJS from './external/crypto-js.min'
 import { CheerioAPI } from 'cheerio'
+import entities = require('entities')
 
 // =========================
 // ✅ SAFE HELPERS
