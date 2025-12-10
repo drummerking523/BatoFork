@@ -643,13 +643,13 @@ var _Sources = (() => {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.HomeSectionType = void 0;
-      var HomeSectionType;
-      (function(HomeSectionType2) {
-        HomeSectionType2["singleRowNormal"] = "singleRowNormal";
-        HomeSectionType2["singleRowLarge"] = "singleRowLarge";
-        HomeSectionType2["doubleRow"] = "doubleRow";
-        HomeSectionType2["featured"] = "featured";
-      })(HomeSectionType = exports.HomeSectionType || (exports.HomeSectionType = {}));
+      var HomeSectionType2;
+      (function(HomeSectionType3) {
+        HomeSectionType3["singleRowNormal"] = "singleRowNormal";
+        HomeSectionType3["singleRowLarge"] = "singleRowLarge";
+        HomeSectionType3["doubleRow"] = "doubleRow";
+        HomeSectionType3["featured"] = "featured";
+      })(HomeSectionType2 = exports.HomeSectionType || (exports.HomeSectionType = {}));
     }
   });
 
@@ -1451,9 +1451,10 @@ var _Sources = (() => {
     BatoTo: () => BatoTo,
     BatoToInfo: () => BatoToInfo
   });
-  var import_types = __toESM(require_lib());
+  var import_types2 = __toESM(require_lib());
 
   // src/BatoTo/BatoToParser.ts
+  var import_types = __toESM(require_lib());
   var CryptoJS = __toESM(require_crypto_js_min());
   function cleanText(input) {
     return input?.replace(/\s+/g, " ").trim() || "";
@@ -1520,66 +1521,104 @@ var _Sources = (() => {
       pages
     });
   }
-  function parseHomeSections($2, sectionCallback) {
-    const results = [];
-    $2(".item").each((_, el) => {
-      const id = $2(el).find("a").attr("href")?.split("/").pop();
-      const title = cleanText($2(el).find(".item-title").text());
-      const image = normalizeUrl($2(el).find("img").attr("src"));
-      if (!id || !title) return;
-      results.push(
+  var parseHomeSections = ($2, sectionCallback) => {
+    const createTileManga = (elem) => {
+      const mangaId2 = $2("a", elem).attr("href")?.split("/series/")[1]?.split(/[/?#]/)[0];
+      if (!mangaId2) return null;
+      const title = $2(".item-title", elem).text().trim() || $2("img", elem).attr("alt")?.trim() || "Unknown Title";
+      const image = `mangaId=${mangaId2}`;
+      return App.createSourceManga({
+        id: mangaId2,
+        mangaInfo: App.createMangaInfo({
+          titles: [title],
+          image,
+          status: "Ongoing",
+          // we don’t know actual status from the tile
+          author: "",
+          artist: "",
+          tags: [],
+          desc: ""
+        })
+      });
+    };
+    const popularSection = App.createHomeSection({
+      id: "popular_updates",
+      title: "Popular Updates",
+      type: import_types.HomeSectionType.singleRowLarge,
+      containsMoreItems: true
+    });
+    const latestSection = App.createHomeSection({
+      id: "latest_releases",
+      title: "Latest Releases",
+      type: import_types.HomeSectionType.singleRowNormal,
+      containsMoreItems: true
+    });
+    const popularItems = [];
+    const latestItems = [];
+    $2(".hot-updates .col.item, .highlight-updates .col.item").each((_, elem) => {
+      const manga = createTileManga($2(elem));
+      if (manga) popularItems.push(manga);
+    });
+    $2(".latest-updates .col.item, .latest-updates .item").each((_, elem) => {
+      const manga = createTileManga($2(elem));
+      if (manga) latestItems.push(manga);
+    });
+    popularSection.items = popularItems;
+    latestSection.items = latestItems;
+    sectionCallback(popularSection);
+    sectionCallback(latestSection);
+  };
+  var parseViewMore = ($2) => {
+    const mangas = [];
+    $2(".series-list .col.item, .series-list .item").each((_, manga) => {
+      const id = $2("a", manga).attr("href")?.split("/series/")[1]?.split(/[/?#]/)[0];
+      if (!id) return;
+      const title = $2(".item-title", manga).text().trim() || $2("img", manga).attr("alt")?.trim() || "Unknown Title";
+      const image = `mangaId=${id}`;
+      mangas.push(
         App.createSourceManga({
           id,
-          title,
-          image,
-          status: "Unknown"
+          mangaInfo: App.createMangaInfo({
+            titles: [title],
+            image,
+            status: "Ongoing",
+            author: "",
+            artist: "",
+            tags: [],
+            desc: ""
+          })
         })
       );
     });
-    sectionCallback(
-      App.createHomeSection({
-        id: "featured",
-        title: "Featured",
-        items: results
-      })
-    );
-  }
-  function parseViewMore($2) {
+    return mangas;
+  };
+  var parseSearch = ($2, langSearchFilter, langs) => {
     const results = [];
-    $2(".item").each((_, el) => {
-      const id = $2(el).find("a").attr("href")?.split("/").pop();
-      const title = cleanText($2(el).find(".item-title").text());
-      const image = normalizeUrl($2(el).find("img").attr("src"));
-      if (!id || !title) return;
+    $2(".series-list .col.item, .series-list .item").each((_, manga) => {
+      const id = $2("a", manga).attr("href")?.split("/series/")[1]?.split(/[/?#]/)[0];
+      if (!id) return;
+      let lang = BTLanguages.getLangCode($2(".item-lang", manga).text().trim() || "");
+      if (lang === "Unknown") lang = "\u{1F1EC}\u{1F1E7}";
+      if (langSearchFilter && !langs.includes(lang)) return;
+      const title = $2(".item-title", manga).text().trim() || $2("img", manga).attr("alt")?.trim() || "Unknown Title";
+      const image = `mangaId=${id}`;
       results.push(
         App.createSourceManga({
           id,
-          title,
-          image,
-          status: "Unknown"
+          mangaInfo: App.createMangaInfo({
+            titles: [title],
+            image,
+            status: "Ongoing",
+            author: "",
+            artist: "",
+            tags: [],
+            desc: ""
+          })
         })
       );
     });
     return results;
-  }
-  function parseSearch($2, _langFilter, _langs) {
-    const results = [];
-    $2(".item").each((_, el) => {
-      const id = $2(el).find("a").attr("href")?.split("/").pop();
-      const title = cleanText($2(el).find(".item-title").text());
-      const image = normalizeUrl($2(el).find("img").attr("src"));
-      if (!id || !title) return;
-      results.push(
-        App.createSourceManga({
-          id,
-          title,
-          image,
-          status: "Unknown"
-        })
-      );
-    });
-    return results;
-  }
+  };
   function parseTags() {
     return [
       App.createTagSection({
@@ -2276,11 +2315,11 @@ var _Sources = (() => {
       return this.Languages.filter((Language) => Language.default).map((Language) => Language.BTCode);
     }
   };
-  var BTLanguages = new BTLanguagesClass();
+  var BTLanguages2 = new BTLanguagesClass();
 
   // src/BatoTo/BatoToSettings.ts
   var getLanguages = async (stateManager) => {
-    return await stateManager.retrieve("languages") ?? BTLanguages.getDefault();
+    return await stateManager.retrieve("languages") ?? BTLanguages2.getDefault();
   };
   var getLanguageHomeFilter = async (stateManager) => {
     return await stateManager.retrieve("language_home_filter") ?? false;
@@ -2302,8 +2341,8 @@ var _Sources = (() => {
               App.createDUISelect({
                 id: "languages",
                 label: "Languages",
-                options: BTLanguages.getBTCodeList(),
-                labelResolver: async (option) => BTLanguages.getName(option),
+                options: BTLanguages2.getBTCodeList(),
+                labelResolver: async (option) => BTLanguages2.getName(option),
                 value: App.createDUIBinding({
                   get: () => getLanguages(stateManager),
                   set: async (newValue) => await stateManager.store("languages", newValue)
@@ -2338,7 +2377,7 @@ var _Sources = (() => {
       label: "Reset to Default",
       onTap: async () => {
         await Promise.all([
-          stateManager.store("languages", BTLanguages.getDefault()),
+          stateManager.store("languages", BTLanguages2.getDefault()),
           stateManager.store("language_home_filter", false),
           stateManager.store("language_search_filter", false)
         ]);
@@ -2384,15 +2423,15 @@ var _Sources = (() => {
     author: "Drummerking523",
     authorWebsite: "https://github.com/drummerking523/BatoFix",
     description: "Extension that pulls manga from bato.to",
-    contentRating: import_types.ContentRating.MATURE,
+    contentRating: import_types2.ContentRating.MATURE,
     websiteBaseURL: BATO_DOMAIN,
     sourceTags: [
       {
         text: "Multi Language",
-        type: import_types.BadgeColor.BLUE
+        type: import_types2.BadgeColor.BLUE
       }
     ],
-    intents: import_types.SourceIntents.MANGA_CHAPTERS | import_types.SourceIntents.HOMEPAGE_SECTIONS | import_types.SourceIntents.SETTINGS_UI | import_types.SourceIntents.CLOUDFLARE_BYPASS_REQUIRED
+    intents: import_types2.SourceIntents.MANGA_CHAPTERS | import_types2.SourceIntents.HOMEPAGE_SECTIONS | import_types2.SourceIntents.SETTINGS_UI | import_types2.SourceIntents.CLOUDFLARE_BYPASS_REQUIRED
   };
   var BatoTo = class _BatoTo {
     constructor(cheerio) {
@@ -2534,7 +2573,7 @@ var _Sources = (() => {
           throw new Error("Requested to getViewMoreItems for a section ID which doesn't exist");
       }
       const langHomeFilter = await this.stateManager.retrieve("language_home_filter") ?? false;
-      const langs = await this.stateManager.retrieve("languages") ?? BTLanguages.getDefault();
+      const langs = await this.stateManager.retrieve("languages") ?? BTLanguages2.getDefault();
       param += langHomeFilter ? `&langs=${langs.join(",")}` : "";
       const request = App.createRequest({
         url: `${BATO_DOMAIN}/browse`,
@@ -2570,7 +2609,7 @@ var _Sources = (() => {
         });
       }
       const langSearchFilter = await this.stateManager.retrieve("language_search_filter") ?? false;
-      const langs = await this.stateManager.retrieve("languages") ?? BTLanguages.getDefault();
+      const langs = await this.stateManager.retrieve("languages") ?? BTLanguages2.getDefault();
       const response = await this.requestManager.schedule(request, 1);
       const $2 = this.cheerio.load(response.data);
       const manga = parseSearch($2, langSearchFilter, langs);

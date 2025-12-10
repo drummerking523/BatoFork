@@ -2,6 +2,7 @@ import {
     Chapter,
     ChapterDetails,
     HomeSection,
+    HomeSectionType,
     MangaProviding,
     SearchResultsProviding,
     SourceManga,
@@ -146,92 +147,150 @@ export function parseChapterDetails(
 // ✅ HOME SECTIONS
 // =========================
 
-export function parseHomeSections(
-    $: CheerioAPI,
-    sectionCallback: (section: HomeSection) => void
-) {
+export const parseHomeSections = ($: CheerioAPI, sectionCallback: (section: HomeSection) => void): void => {
 
-    const results: SourceManga[] = []
+    // --- Helper to normalize a tile into a full SourceManga ---
+    const createTileManga = (elem: Cheerio<Element>): SourceManga | null => {
+        const mangaId = $('a', elem).attr('href')?.split('/series/')[1]?.split(/[/?#]/)[0]
+        if (!mangaId) return null
 
-    $('.item').each((_, el) => {
-        const id = $(el).find('a').attr('href')?.split('/').pop()
-        const title = cleanText($(el).find('.item-title').text())
-        const image = normalizeUrl($(el).find('img').attr('src'))
+        const title = $('.item-title', elem).text().trim() ||
+            $('img', elem).attr('alt')?.trim() ||
+            'Unknown Title'
 
-        if (!id || !title) return
+        // Bato uses a special thumbnail system; we keep the same pattern you already use
+        const image = `mangaId=${mangaId}`
 
-        results.push(
-            App.createSourceManga({
-                id,
-                title,
-                image,
-                status: 'Unknown'
+        return App.createSourceManga({
+            id: mangaId,
+            mangaInfo: App.createMangaInfo({
+                titles: [title],
+                image: image,
+                status: 'Ongoing',   // we don’t know actual status from the tile
+                author: '',
+                artist: '',
+                tags: [],
+                desc: ''
             })
-        )
+        })
+    }
+
+    // --- Build sections (Popular Updates + Latest Releases) ---
+
+    const popularSection = App.createHomeSection({
+        id: 'popular_updates',
+        title: 'Popular Updates',
+        type: HomeSectionType.singleRowLarge,
+        containsMoreItems: true
     })
 
-    sectionCallback(
-        App.createHomeSection({
-            id: 'featured',
-            title: 'Featured',
-            items: results
-        })
-    )
+    const latestSection = App.createHomeSection({
+        id: 'latest_releases',
+        title: 'Latest Releases',
+        type: HomeSectionType.singleRowNormal,
+        containsMoreItems: true
+    })
+
+    const popularItems: SourceManga[] = []
+    const latestItems: SourceManga[] = []
+
+    // Popular updates block – same selectors as before
+    $('.hot-updates .col.item, .highlight-updates .col.item').each((_, elem) => {
+        const manga = createTileManga($(elem))
+        if (manga) popularItems.push(manga)
+    })
+
+    // Latest releases block – same selectors as before
+    $('.latest-updates .col.item, .latest-updates .item').each((_, elem) => {
+        const manga = createTileManga($(elem))
+        if (manga) latestItems.push(manga)
+    })
+
+    popularSection.items = popularItems
+    latestSection.items = latestItems
+
+    // Only call back once per section *after* items are fully formed
+    sectionCallback(popularSection)
+    sectionCallback(latestSection)
 }
 
 // =========================
 // ✅ VIEW MORE
 // =========================
 
-export function parseViewMore($: CheerioAPI): SourceManga[] {
+export const parseViewMore = ($: CheerioAPI): SourceManga[] => {
+    const mangas: SourceManga[] = []
 
-    const results: SourceManga[] = []
+    $('.series-list .col.item, .series-list .item').each((_, manga) => {
+        const id = $('a', manga).attr('href')?.split('/series/')[1]?.split(/[/?#]/)[0]
+        if (!id) return
 
-    $('.item').each((_, el) => {
-        const id = $(el).find('a').attr('href')?.split('/').pop()
-        const title = cleanText($(el).find('.item-title').text())
-        const image = normalizeUrl($(el).find('img').attr('src'))
+        const title = $('.item-title', manga).text().trim()
+            || $('img', manga).attr('alt')?.trim()
+            || 'Unknown Title'
 
-        if (!id || !title) return
+        const image = `mangaId=${id}`
 
-        results.push(
+        mangas.push(
             App.createSourceManga({
                 id,
-                title,
-                image,
-                status: 'Unknown'
+                mangaInfo: App.createMangaInfo({
+                    titles: [title],
+                    image,
+                    status: 'Ongoing',
+                    author: '',
+                    artist: '',
+                    tags: [],
+                    desc: ''
+                })
             })
         )
     })
 
-    return results
+    return mangas
 }
+
 
 // =========================
 // ✅ SEARCH
 // =========================
 
-export function parseSearch(
+export const parseSearch = (
     $: CheerioAPI,
-    _langFilter: boolean,
-    _langs: string[]
-): SourceManga[] {
+    langSearchFilter: boolean,
+    langs: string[]
+): SourceManga[] => {
 
     const results: SourceManga[] = []
 
-    $('.item').each((_, el) => {
-        const id = $(el).find('a').attr('href')?.split('/').pop()
-        const title = cleanText($(el).find('.item-title').text())
-        const image = normalizeUrl($(el).find('img').attr('src'))
+    $('.series-list .col.item, .series-list .item').each((_, manga) => {
+        const id = $('a', manga).attr('href')?.split('/series/')[1]?.split(/[/?#]/)[0]
+        if (!id) return
 
-        if (!id || !title) return
+        // Language handling as before
+        let lang = BTLanguages.getLangCode($('.item-lang', manga).text().trim() || '')
+        if (lang === 'Unknown') lang = '🇬🇧'
+
+        if (langSearchFilter && !langs.includes(lang)) return
+
+        const title = $('.item-title', manga).text().trim()
+            || $('img', manga).attr('alt')?.trim()
+            || 'Unknown Title'
+
+        const image = `mangaId=${id}`
 
         results.push(
             App.createSourceManga({
                 id,
-                title,
-                image,
-                status: 'Unknown'
+                mangaInfo: App.createMangaInfo({
+                    titles: [title],
+                    image,
+                    status: 'Ongoing',
+                    author: '',
+                    artist: '',
+                    tags: [],
+                    desc: ''
+                })
             })
         )
     })
